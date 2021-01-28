@@ -7,4 +7,5 @@ Session 2: Model testing, FF 3 factor model, both time series and cross-sectiona
 
 Session 3: GMM and conditional CAPM testing. 
 Data involve FF factors, FF portfolios, St. Louis Fed on default spread, BEA labor income growth.
+- I first check the existence of predictability of bond spread on market return. So far the result seems pretty suspicious. I also notice the abnormal spikes in the early 1990s of labor income growth.
 
