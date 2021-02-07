@@ -14,7 +14,7 @@
 # ## Preparation: Import packages and access data
 # 
 
-# In[1]:
+# In[25]:
 
 
 import pandas_datareader.data as web  # module for reading datasets directly from the web
@@ -32,6 +32,8 @@ import scipy as sp
 from dateutil.relativedelta import relativedelta
 import datapungibea as dpb
 import os
+from statsmodels.graphics.tsaplots import plot_acf,plot_pacf
+import seaborn as sns
 # print latex 
 # from IPython.display import display, Math
 
@@ -51,7 +53,7 @@ print('No. of datasets:{}'.format(len(datasets)))
 #datasets # comment out if you want to see all the datasets
 
 
-# In[7]:
+# In[195]:
 
 
 ###########################
@@ -65,23 +67,29 @@ dir = os.path.realpath('.')
 
 # #### For $M kt-Rf, SMB, HML$ Factors:
 
-# In[4]:
+# In[196]:
 
 
 Datatoread='F-F_Research_Data_Factors'
+# Here are alternative dataset for predictability test
+#  'F-F_Research_Data_Factors_weekly',
+#  'F-F_Research_Data_Factors_daily',
 ds_factors = web.DataReader(Datatoread,'famafrench',start=sdate,end=edate) # Taking [0] as extracting 1F-F-Research_Data_Factors_2x3')
 print('\nKEYS\n{}'.format(ds_factors.keys()))
 print('DATASET DESCRIPTION \n {}'.format(ds_factors['DESCR']))
 #From the printed information we know that we need to select the "0" name in the dictionary
 #copy the right dict for later examination
-dfFactor = ds_factors[0].copy()
+dfFactor = ds_factors[1].copy()
 # 0 for monthly data and 1 for yearly data
 dfFactor.reset_index(inplace=True)
 
 #Date format adjustment
 # dfFactor['Date']=dfFactor['Date'].dt.strftime('%Y-%m')
 dfFactor = dfFactor.set_index(['Date'])
-dfFactor.index=dfFactor.index.to_timestamp()
+try:
+    dfFactor.index=dfFactor.index.to_timestamp()
+except Exception:
+    pass
 # dfFactor['Date']=dfFactor['Date'].dt.to_timestamp(freq='M').dt.strftime('%Y-%m')
 #Obtained object dtype
 # dfFactor.index=pd.to_datetime(dfFactor.index)
@@ -91,6 +99,118 @@ RF = dfFactor['RF']
 # dfFactor=dfFactor.drop(columns = ['RF'])
 # I check the scale of the data by printing out the head:
 dfFactor.head()
+
+
+# In[28]:
+
+
+# Make the auto correlation plot 
+series = dfFactor['Mkt-RF']
+fig, axes = plt.subplots(1,2,figsize=(16,8),sharex=True,sharey=True)
+colormap = plt.cm.get_cmap('twilight') 
+colors = [colormap(i) for i in np.linspace(0.3, 0.5,5)]
+# axes[0].plot([0.2, 1], [0.2, 1], ls="--", c=".3")
+for i, k in enumerate(['ACF','PACF']):
+    print(i,k)
+    if i== 0:
+        axes[i].set_ylabel('Correlation coefficient', fontsize = 14)
+        plot_acf(series, lags=50,zero=False,ax= axes[i])
+    else:
+        plot_pacf(series, lags=50,zero=False,ax= axes[i])
+#     axes[i].set_xlabel(k, fontsize = 14)
+# plt.plot()
+plt.savefig('ACF')
+plt.show()
+
+
+# In[148]:
+
+
+# Generate test dictionary
+######
+# Compbell 1997 table
+######
+def ACF_test(dftest, n_split=3):
+    test = np.array_split(dftest, n_split)
+    test.insert(0, dftest)
+    test_result = {}
+    for t,series in enumerate(test):
+        start_date = series.index[0].date().strftime('%Y/%m/%d')
+        end_date = series.index[-1].date().strftime('%Y/%m/%d')
+        sample_range = start_date +'-'+end_date
+        sample_num = len(series.index)
+        sample_mean = np.round(series.mean(),3)
+        sample_SD = np.round(series.std(),3)
+        sample_coef = np.round(sm.tsa.acf(series,nlags=4)*100,1)
+        sample_coef = sample_coef[1:]
+        sample_LB5 = np.round(sm.stats.acorr_ljungbox(series, lags=[5])[0][0],1)
+        sample_LB10 = np.round(sm.stats.acorr_ljungbox(series, lags=[10])[0][0],1)
+        if t ==0:
+            test_result['Sample Period'] = [sample_range]
+            test_result['Sample Size'] = [sample_num]
+            test_result['Mean'] = [sample_mean]
+            test_result['SD'] = [sample_SD]
+            for i in range(len(sample_coef)):
+                test_result['\hat\rho_{}'.format(str(i+1))] = [sample_coef[i]]
+            test_result['\hat Q_5'] =[sample_LB5]
+            test_result['\hat Q_10'] =[sample_LB10]
+        else:
+            test_result['Sample Period'].append(sample_range)
+            test_result['Sample Size'].append(sample_num)
+            test_result['Mean'].append(sample_mean) 
+            test_result['SD'].append(sample_SD) 
+            for i in range(len(sample_coef)):
+                test_result['\hat\rho_{}'.format(str(i+1))].append(sample_coef[i]) 
+            test_result['\hat Q_5'].append(sample_LB5) 
+            test_result['\hat Q_10'].append(sample_LB10)
+    test_result=pd.DataFrame.from_dict(test_result)
+    return test_result
+
+
+# In[149]:
+
+
+out = ACF_test(dfFactor['Mkt-RF'])
+print(out.to_latex(index=False))
+
+
+# In[194]:
+
+
+######
+# Cochrane 2005 table
+######
+def Cochrane_2005(dftest, horizons=[1,2,3,5,7,10]):
+    dfreturn = pd.DataFrame(columns=['x','y'])
+    ceof_dic= {'beta':[],'t':[],'ratio':[]}
+    for h in horizons:
+        dfreturn['x'] = dftest.rolling(h).sum()
+        dfreturn['y'] = dftest.rolling(h).sum().shift(-h)
+        dfreturn=dfreturn.dropna()
+        X = sm.add_constant(dfreturn['x'])
+        y = dfreturn['y']
+        model = sm.OLS(y, X)
+        results = model.fit()
+        ceof_dic['beta'].append(np.round(results.params[1:][0],2))
+        ceof_dic['t'].append(np.round(results.tvalues[1:][0],2))
+        ceof_dic['ratio'].append(np.round(dfreturn['x'].std()/np.sqrt(h),1))
+    ceof_dic = pd.DataFrame.from_dict(ceof_dic).T
+    ceof_dic.columns = horizons
+    return ceof_dic
+
+
+# In[197]:
+
+
+ceof_dic = Cochrane_2005(dfFactor['Mkt-RF'])
+print(ceof_dic.to_latex(index=True))
+
+
+# In[198]:
+
+
+ceof_dic = Cochrane_2005((np.log(dfFactor['Mkt-RF']/100+1)-1)*100)
+print(ceof_dic.to_latex(index=True))
 
 
 # #### For 25 portfolios formed on size and book-to-market (5 x 5)
